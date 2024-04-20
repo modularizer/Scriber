@@ -11,16 +11,20 @@ import android.content.pm.PackageManager
 import com.google.android.material.snackbar.Snackbar
 import androidx.navigation.ui.AppBarConfiguration
 import com.example.scriber.databinding.ActivityMainBinding
+import android.media.MediaRecorder
+
 
 import android.text.Editable
 import android.text.TextWatcher
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.media.AudioManager
 import android.widget.Button
 import android.widget.EditText
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
+import java.io.File
 
 fun getSecureSharedPreferences(context: Context): SharedPreferences {
     val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
@@ -79,10 +83,9 @@ class PhoneNumberTextWatcher : TextWatcher {
 
 
 class MainActivity : AppCompatActivity() {
-    // TODO: Replace with the actual phone number
-
-    private lateinit var appBarConfiguration: AppBarConfiguration
     private lateinit var binding: ActivityMainBinding
+    private lateinit var recorder: MediaRecorder
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -102,25 +105,42 @@ class MainActivity : AppCompatActivity() {
         saveButton.setOnClickListener {
             phoneNumber = phoneNumberInput.text.toString()
             addSecretToSharedPreferences(this, "phoneNumber", phoneNumber)
-
-            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.CALL_PHONE), 1)
-            } else {
-                makePhoneCall(phoneNumber)
-            }
+            makePhoneCall(phoneNumber)
         }
 
         setSupportActionBar(binding.toolbar)
+    }
 
+    private fun setupMediaRecorder() {
+        recorder = MediaRecorder().apply {
+            setAudioSource(MediaRecorder.AudioSource.MIC)
+            setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+            setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+            val outputFile = File(getExternalFilesDir(null), "recorded_call.3gp")
 
-
+            setOutputFile(outputFile.absolutePath)
+            prepare()
+            start()  // Start recording
+        }
     }
 
     private fun makePhoneCall(number: String) {
+        if (!hasPermissions()) {
+            requestPermissions()
+            return
+        }
+        setupMediaRecorder()
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.isSpeakerphoneOn = true
+
+
         val intent = Intent(Intent.ACTION_CALL)
         intent.data = Uri.parse("tel:$number")
         if (intent.resolveActivity(packageManager) != null) {
             startActivity(intent)
+            recorder.stop()
+            recorder.release() // Release the recorder resources
+
         } else {
             Snackbar.make(binding.root, "Unable to make call", Snackbar.LENGTH_LONG).show()
         }
@@ -131,6 +151,14 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        recorder.apply {
+            stop()
+            release()
+        }
+    }
+
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_settings -> true
@@ -138,15 +166,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    var permissionsRequired = arrayOf(
+        android.Manifest.permission.CALL_PHONE,
+        android.Manifest.permission.RECORD_AUDIO,
+        android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+
+    fun hasPermissions(): Boolean {
+        return permissionsRequired.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun requestPermissions() {
+        ActivityCompat.requestPermissions(this, permissionsRequired, 1)
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            var phoneNumber = getSecretFromSharedPreferences(this, "phoneNumber")
-            makePhoneCall(phoneNumber) // TODO: Replace with the actual phone number
+        if (hasPermissions()){
+            makePhoneCall(getSecretFromSharedPreferences(this, "phoneNumber"))
         } else {
-            Snackbar.make(binding.root,
-                "Permission denied, cannot make call",
-                Snackbar.LENGTH_LONG).show()
+            Snackbar.make(binding.root, "Permission denied, cannot make call", Snackbar.LENGTH_LONG).show()
         }
     }
 }
